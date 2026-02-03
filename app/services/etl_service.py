@@ -103,7 +103,7 @@ class ETLService:
                     "status": 200
                 }
 
-            print(f"📊 Datos en MongoDB: {len(datos_mongo)} documentos")
+            print(f"Datos en MongoDB: {len(datos_mongo)} documentos")
 
             df = pd.DataFrame(datos_mongo)
 
@@ -134,6 +134,10 @@ class ETLService:
                 'allies', 'enemies', 'videoGames', 'shortFilms'
             ]
             df_final = df[columnas_finales].fillna("")
+
+            for col in ['films', 'tvShows', 'parkAttractions', 'allies', 'enemies', 'videoGames', 'shortFilms']:
+             df_final[col] = df_final[col].apply(lambda x: "0" if str(x).strip() == "" else x)
+
 
             print(f"Datos transformados: {len(df_final)} ")
 

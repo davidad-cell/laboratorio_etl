@@ -13,11 +13,8 @@ class ETLService:
         self.mongo_db = get_mongo_client()
         self.mysql_engine = get_mysql_engine()
         self.collection_name = "personajes_raw"
-        self.meta_collection = "etl_meta"   # colección auxiliar para guardar estado
 
-    
-    # Extracción con control de paginación
-    
+    # Extracción con idempotencia estricta
     async def extraer_datos_api(self, cantidad: int) -> Dict[str, Any]:
         try:
             if cantidad <= 0:
@@ -28,55 +25,35 @@ class ETLService:
                     "status": 400
                 }
 
-            registros_guardados = 0
             collection = self.mongo_db[self.collection_name]
-            meta = self.mongo_db[self.meta_collection]
 
- # Recuperar última página procesada
-            ultima_pagina_doc = meta.find_one({"_meta": "ultima_pagina"})
-            pagina = ultima_pagina_doc["pagina"] + 1 if ultima_pagina_doc else 1
+            # Siempre traer desde la primera página
+            response = requests.get(f"{self.api_url}?page=1", timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            personajes = data.get("data", [])
 
-            while registros_guardados < cantidad:
-                response = requests.get(f"{self.api_url}?page={pagina}", timeout=30)
-                response.raise_for_status()
-                data = response.json()
-                personajes = data.get("data", [])
+            # Tomar solo la cantidad solicitada
+            personajes = personajes[:cantidad]
 
-                if not personajes:
-                    break
+            operaciones = []
+            for personaje in personajes:
+                personaje_id = personaje.get("_id") or personaje.get("id")
+                operacion = UpdateOne(
+                    {"_id": personaje_id},
+                    {"$set": personaje},
+                    upsert=True
+                )
+                operaciones.append(operacion)
 
-                operaciones = []
-                for personaje in personajes:
-                    if registros_guardados >= cantidad:
-                        break
+            if operaciones:
+                collection.bulk_write(operaciones)
 
-                    personaje_id = personaje.get("_id") or personaje.get("id")
-                    operacion = UpdateOne(
-                        {"_id": personaje_id},
-                        {"$set": personaje},
-                        upsert=True
-                    )
-                    operaciones.append(operacion)
-                    registros_guardados += 1
-
-                if operaciones:
-                    collection.bulk_write(operaciones)
-                    print(f"   Página {pagina}: {len(operaciones)} personajes procesados")
-
-                pagina += 1
-
- # Guardar última página procesada
-            meta.update_one(
-                {"_meta": "ultima_pagina"},
-                {"$set": {"pagina": pagina - 1}},
-                upsert=True
-            )
-
-            print(f"Extracción completada: {registros_guardados} ")
+            print(f"Extracción completada: {len(operaciones)} personajes")
 
             return {
-                "mensaje": "Datos extraídos exitosamente",
-                "registros_guardados": registros_guardados,
+                "mensaje": "Datos extraídos exitosamente (idempotente)",
+                "registros_guardados": len(operaciones),
                 "fuente": "Disney API",
                 "status": 201
             }
@@ -86,12 +63,9 @@ class ETLService:
         except Exception as e:
             raise Exception(f"Error en extracción: {str(e)}")
 
-    
-    # Transformación y Carga con 
+    # Transformación y Carga con UPSERT
     async def transformar_cargar_datos(self) -> Dict[str, Any]:
         try:
-            
-
             collection = self.mongo_db[self.collection_name]
             datos_mongo = list(collection.find({}))
 
@@ -120,13 +94,8 @@ class ETLService:
             def list_to_str(x):
                 return ", ".join(x) if isinstance(x, list) else str(x) if x else ""
 
-            df['films'] = df['films'].apply(list_to_str)
-            df['tvShows'] = df['tvShows'].apply(list_to_str)
-            df['parkAttractions'] = df['parkAttractions'].apply(list_to_str)
-            df['allies'] = df['allies'].apply(list_to_str)
-            df['enemies'] = df['enemies'].apply(list_to_str)
-            df['videoGames'] = df['videoGames'].apply(list_to_str)
-            df['shortFilms'] = df['shortFilms'].apply(list_to_str)
+            for col in ['films', 'tvShows', 'parkAttractions', 'allies', 'enemies', 'videoGames', 'shortFilms']:
+                df[col] = df[col].apply(list_to_str)
 
             columnas_finales = [
                 'id', 'name', 'imageUrl',
@@ -136,10 +105,9 @@ class ETLService:
             df_final = df[columnas_finales].fillna("")
 
             for col in ['films', 'tvShows', 'parkAttractions', 'allies', 'enemies', 'videoGames', 'shortFilms']:
-             df_final[col] = df_final[col].apply(lambda x: "0" if str(x).strip() == "" else x)
+                df_final[col] = df_final[col].apply(lambda x: "0" if str(x).strip() == "" else x)
 
-
-            print(f"Datos transformados: {len(df_final)} ")
+            print(f"Datos transformados: {len(df_final)}")
 
             Base.metadata.create_all(self.mysql_engine)
 
@@ -174,7 +142,7 @@ class ETLService:
 
             registros_procesados = len(df_final)
 
-            print(f" Transformación completada: {registros_procesados}")
+            print(f"Transformación completada: {registros_procesados}")
 
             return {
                 "mensaje": "Pipeline finalizado con UPSERT",
@@ -186,20 +154,12 @@ class ETLService:
         except Exception as e:
             raise Exception(f"Error en transformación: {str(e)}")
 
-    
     # Reset
-    
     async def reset_sistema(self) -> Dict[str, Any]:
         try:
-            
-
             collection = self.mongo_db[self.collection_name]
             mongo_count = collection.count_documents({})
             collection.delete_many({})
-
-            # limpiar meta
-            meta = self.mongo_db[self.meta_collection]
-            meta.delete_many({})
 
             with self.mysql_engine.connect() as conn:
                 result = conn.execute(
@@ -216,7 +176,7 @@ class ETLService:
                     conn.execute(text("TRUNCATE TABLE personajes_master"))
                     conn.commit()
 
-            print(f" Sistema limpiado: MongoDB({mongo_count}), MySQL({mysql_count})")
+            print(f"Sistema limpiado: MongoDB({mongo_count}), MySQL({mysql_count})")
 
             return {
                 "mensaje": "Sistema reseteado correctamente",
@@ -226,4 +186,5 @@ class ETLService:
             }
 
         except Exception as e:
-            raise Exception(f"Error en reset: {str(e)}")         
+            raise Exception(f"Error en reset: {str(e)}")
+       

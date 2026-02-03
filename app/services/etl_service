@@ -31,3 +31,37 @@ class ETLService:
             registros_guardados = 0
             collection = self.mongo_db[self.collection_name]
             meta = self.mongo_db[self.meta_collection]
+
+ # Recuperar última página procesada
+            ultima_pagina_doc = meta.find_one({"_meta": "ultima_pagina"})
+            pagina = ultima_pagina_doc["pagina"] + 1 if ultima_pagina_doc else 1
+
+            while registros_guardados < cantidad:
+                response = requests.get(f"{self.api_url}?page={pagina}", timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                personajes = data.get("data", [])
+
+                if not personajes:
+                    break
+
+                operaciones = []
+                for personaje in personajes:
+                    if registros_guardados >= cantidad:
+                        break
+
+                    personaje_id = personaje.get("_id") or personaje.get("id")
+                    operacion = UpdateOne(
+                        {"_id": personaje_id},
+                        {"$set": personaje},
+                        upsert=True
+                    )
+                    operaciones.append(operacion)
+                    registros_guardados += 1
+
+                if operaciones:
+                    collection.bulk_write(operaciones)
+                    print(f"   Página {pagina}: {len(operaciones)} personajes procesados")
+
+                pagina += 1
+           

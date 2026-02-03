@@ -64,4 +64,162 @@ class ETLService:
                     print(f"   Página {pagina}: {len(operaciones)} personajes procesados")
 
                 pagina += 1
-           
+
+ # Guardar última página procesada
+            meta.update_one(
+                {"_meta": "ultima_pagina"},
+                {"$set": {"pagina": pagina - 1}},
+                upsert=True
+            )
+
+            print(f"Extracción completada: {registros_guardados} ")
+
+            return {
+                "mensaje": "Datos extraídos exitosamente",
+                "registros_guardados": registros_guardados,
+                "fuente": "Disney API",
+                "status": 201
+            }
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Error de conexión con la API: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Error en extracción: {str(e)}")
+
+    
+    # Transformación y Carga con 
+    async def transformar_cargar_datos(self) -> Dict[str, Any]:
+        try:
+            
+
+            collection = self.mongo_db[self.collection_name]
+            datos_mongo = list(collection.find({}))
+
+            if not datos_mongo:
+                return {
+                    "mensaje": "No hay datos en MongoDB para transformar",
+                    "registros_procesados": 0,
+                    "tabla_destino": "personajes_master",
+                    "status": 200
+                }
+
+            print(f"📊 Datos en MongoDB: {len(datos_mongo)} documentos")
+
+            df = pd.DataFrame(datos_mongo)
+
+            # Asegurar columnas
+            for col in ['films', 'tvShows', 'parkAttractions', 'allies', 'enemies', 'videoGames', 'shortFilms']:
+                if col not in df.columns:
+                    df[col] = ""
+
+            # Renombrar _id a id si es necesario
+            if "_id" in df.columns and "id" not in df.columns:
+                df = df.rename(columns={"_id": "id"})
+
+            # Convertir listas a strings
+            def list_to_str(x):
+                return ", ".join(x) if isinstance(x, list) else str(x) if x else ""
+
+            df['films'] = df['films'].apply(list_to_str)
+            df['tvShows'] = df['tvShows'].apply(list_to_str)
+            df['parkAttractions'] = df['parkAttractions'].apply(list_to_str)
+            df['allies'] = df['allies'].apply(list_to_str)
+            df['enemies'] = df['enemies'].apply(list_to_str)
+            df['videoGames'] = df['videoGames'].apply(list_to_str)
+            df['shortFilms'] = df['shortFilms'].apply(list_to_str)
+
+            columnas_finales = [
+                'id', 'name', 'imageUrl',
+                'films', 'tvShows', 'parkAttractions',
+                'allies', 'enemies', 'videoGames', 'shortFilms'
+            ]
+            df_final = df[columnas_finales].fillna("")
+
+            print(f"Datos transformados: {len(df_final)} ")
+
+            Base.metadata.create_all(self.mysql_engine)
+
+            # UPSERT en MySQL
+            with self.mysql_engine.connect() as conn:
+                for _, row in df_final.iterrows():
+                    stmt = insert(PersonajeDisney.__table__).values(
+                        id=row['id'],
+                        name=row['name'],
+                        imageUrl=row['imageUrl'],
+                        films=row['films'],
+                        tvShows=row['tvShows'],
+                        parkAttractions=row['parkAttractions'],
+                        allies=row['allies'],
+                        enemies=row['enemies'],
+                        videoGames=row['videoGames'],
+                        shortFilms=row['shortFilms']
+                    )
+                    stmt = stmt.on_duplicate_key_update(
+                        name=stmt.inserted.name,
+                        imageUrl=stmt.inserted.imageUrl,
+                        films=stmt.inserted.films,
+                        tvShows=stmt.inserted.tvShows,
+                        parkAttractions=stmt.inserted.parkAttractions,
+                        allies=stmt.inserted.allies,
+                        enemies=stmt.inserted.enemies,
+                        videoGames=stmt.inserted.videoGames,
+                        shortFilms=stmt.inserted.shortFilms
+                    )
+                    conn.execute(stmt)
+                conn.commit()
+
+            registros_procesados = len(df_final)
+
+            print(f" Transformación completada: {registros_procesados}")
+
+            return {
+                "mensaje": "Pipeline finalizado con UPSERT",
+                "registros_procesados": registros_procesados,
+                "tabla_destino": "personajes_master",
+                "status": 200
+            }
+
+        except Exception as e:
+            raise Exception(f"Error en transformación: {str(e)}")
+
+    
+    # Reset
+    
+    async def reset_sistema(self) -> Dict[str, Any]:
+        try:
+            
+
+            collection = self.mongo_db[self.collection_name]
+            mongo_count = collection.count_documents({})
+            collection.delete_many({})
+
+            # limpiar meta
+            meta = self.mongo_db[self.meta_collection]
+            meta.delete_many({})
+
+            with self.mysql_engine.connect() as conn:
+                result = conn.execute(
+                    text("SELECT COUNT(*) as count FROM information_schema.tables "
+                         "WHERE table_schema = DATABASE() AND table_name = 'personajes_master'")
+                )
+                table_exists = result.fetchone()[0] > 0
+
+                mysql_count = 0
+                if table_exists:
+                    result = conn.execute(text("SELECT COUNT(*) as count FROM personajes_master"))
+                    mysql_count = result.fetchone()[0]
+
+                    conn.execute(text("TRUNCATE TABLE personajes_master"))
+                    conn.commit()
+
+            print(f" Sistema limpiado: MongoDB({mongo_count}), MySQL({mysql_count})")
+
+            return {
+                "mensaje": "Sistema reseteado correctamente",
+                "mongo_docs_eliminados": mongo_count,
+                "mysql_rows_eliminadas": mysql_count,
+                "status": 200
+            }
+
+        except Exception as e:
+            raise Exception(f"Error en reset: {str(e)}")         

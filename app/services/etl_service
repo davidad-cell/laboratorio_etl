@@ -6,3 +6,28 @@ from sqlalchemy import text
 from sqlalchemy.dialects.mysql import insert
 from app.database import get_mongo_client, get_mysql_engine
 from app.models.personajes_sql import PersonajeDisney, Base
+
+class ETLService:
+    def __init__(self):
+        self.api_url = "https://api.disneyapi.dev/character"
+        self.mongo_db = get_mongo_client()
+        self.mysql_engine = get_mysql_engine()
+        self.collection_name = "personajes_raw"
+        self.meta_collection = "etl_meta"   # colección auxiliar para guardar estado
+
+    
+    # Extracción con control de paginación
+    
+    async def extraer_datos_api(self, cantidad: int) -> Dict[str, Any]:
+        try:
+            if cantidad <= 0:
+                return {
+                    "mensaje": "La cantidad debe ser mayor a 0",
+                    "registros_guardados": 0,
+                    "fuente": "Disney API",
+                    "status": 400
+                }
+
+            registros_guardados = 0
+            collection = self.mongo_db[self.collection_name]
+            meta = self.mongo_db[self.meta_collection]

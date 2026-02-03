@@ -4,3 +4,61 @@
     "name": "Laboratorio ETL UdeA - Disney API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "item": [
+
+    {
+      "name": "Extraer Datos",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"cantidad\": 50\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8000/api/v1/etl/extraer",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["api", "v1", "etl", "extraer"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Transformar Datos",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/api/v1/etl/transformar",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["api", "v1", "etl", "transformar"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Reset Sistema",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8000/api/v1/etl/reset",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["api", "v1", "etl", "reset"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
